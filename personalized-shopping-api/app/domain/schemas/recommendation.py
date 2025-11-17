@@ -66,12 +66,17 @@ class RecommendationRequest(BaseModel):
     )
 
 class RecommendationResponse(TimestampMixin):
-    """Response with personalized recommendations"""
+    """Response with personalized recommendations or informational answers"""
 
     query: str
     customer_profile: Optional[CustomerProfileSummary] = None
-    recommendations: List[ProductRecommendation]
-    reasoning: str
+    recommendations: List[ProductRecommendation] = Field(
+        default_factory=list,
+        description="Product recommendations (empty for informational queries)"
+    )
+    reasoning: str = Field(
+        description="Natural language explanation or answer to the query"
+    )
     confidence_score: float = Field(ge=0, le=1)
     processing_time_ms: float = Field(ge=0)
 

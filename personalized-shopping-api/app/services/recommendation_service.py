@@ -17,6 +17,8 @@ from app.models.sentiment_analyzer import SentimentAnalyzer
 from app.models.llm_factory import get_llm, LLMType
 from app.core.config import settings
 from app.core.exceptions import NotFoundException, ValidationException
+from app.agents.intent_classifier_agent import IntentClassifierAgent, QueryIntent
+from app.services.query_answering_service import QueryAnsweringService
 from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,8 @@ class RecommendationService:
         self.customer_repo = CustomerRepository()
         self.review_repo = ReviewRepository()
         self.sentiment_analyzer = SentimentAnalyzer(method="rule_based")
+        self.intent_classifier_agent = IntentClassifierAgent()
+        self.query_answering_service = QueryAnsweringService()
 
     async def get_personalized_recommendations(
         self,
@@ -54,16 +58,42 @@ class RecommendationService:
             raise ValidationException("Either customer_name or customer_id must be provided")
 
         try:
-            # AGENT 1: Customer Profiling
-            agent_execution.append("customer_profiling")
-            logger.info(f"[Agent 1] Profiling customer: {customer_name or customer_id}")
+            # STEP 0: Classify query intent using LLM-based agent
+            logger.info(f"[Intent Classification Agent] Analyzing query: '{query[:50]}...'")
+            intent_result = self.intent_classifier_agent.classify(query)
+            intent = intent_result.intent
+            category = intent_result.category
+            confidence = intent_result.confidence
 
+            logger.info(
+                f"[Intent Classification Agent] Detected: {intent.value} "
+                f"(confidence: {confidence:.2f}) - {intent_result.reasoning}"
+            )
+
+            # Get customer profile (needed for both paths)
             if not customer_id and customer_name:
                 customer_id = self.customer_repo.get_customer_id_by_name(customer_name)
                 if not customer_id:
                     raise NotFoundException("Customer", customer_name)
 
             profile = await self.customer_service.get_customer_profile(customer_id)
+
+            # Route based on intent
+            if intent == QueryIntent.INFORMATIONAL:
+                logger.info(f"[Informational Query Agent] Generating answer for category: {category}")
+                return await self._handle_informational_query(
+                    query=query,
+                    profile=profile,
+                    category=category,
+                    extracted_info=intent_result.extracted_info,
+                    start_time=start_time,
+                )
+            else:
+                # Continue with recommendation workflow
+                logger.info("[Recommendation Agent] Proceeding with recommendation workflow")
+
+            # AGENT 1: Customer Profiling (already done above)
+            agent_execution.append("customer_profiling")
             logger.info(f"[Agent 1] Profile: {profile.total_purchases} purchases, {profile.price_segment} segment")
 
             # AGENT 2: Similar Customer Discovery
@@ -257,6 +287,55 @@ class RecommendationService:
         except Exception as e:
             logger.error(f"Recommendation workflow failed: {e}", exc_info=True)
             raise
+
+    async def _handle_informational_query(
+        self,
+        query: str,
+        profile,
+        category,
+        extracted_info: dict,
+        start_time: float,
+    ) -> RecommendationResponse:
+        """Handle informational queries by answering questions about customer data"""
+        # Generate answer using query answering service
+        answer = await self.query_answering_service.answer_query(
+            query=query,
+            profile=profile,
+            category=category,
+            extracted_info=extracted_info,
+        )
+
+        # Build response (informational responses have no recommendations)
+        processing_time_ms = (time.time() - start_time) * 1000
+
+        response = RecommendationResponse(
+            query=query,
+            customer_profile=CustomerProfileSummary(
+                customer_id=profile.customer_id,
+                customer_name=profile.customer_name,
+                total_purchases=profile.total_purchases,
+                avg_purchase_price=profile.avg_purchase_price,
+                favorite_categories=profile.favorite_categories,
+                price_segment=profile.price_segment,
+                purchase_frequency=profile.purchase_frequency,
+            ),
+            recommendations=[],  # No recommendations for informational queries
+            reasoning=answer,  # The answer goes in the reasoning field
+            confidence_score=1.0,  # High confidence for factual data
+            processing_time_ms=processing_time_ms,
+            similar_customers_analyzed=0,
+            products_considered=0,
+            products_filtered_by_sentiment=0,
+            recommendation_strategy="informational_query",
+            agent_execution_order=["query_classification", "customer_profiling", "query_answering"],
+            metadata={
+                "query_intent": "informational",
+                "information_category": category.value if category else "general",
+            },
+        )
+
+        logger.info(f"[Informational Query Complete] Processed in {processing_time_ms:.0f}ms")
+        return response
 
     def _calculate_category_affinity(self, target_categories: list, product_category: str) -> float:
         """Calculate category affinity score"""
