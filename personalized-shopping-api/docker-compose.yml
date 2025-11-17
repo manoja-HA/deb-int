@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # Ollama LLM service (using host Ollama)
+  # Uncomment to run Ollama in Docker instead
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: shopping-ollama
+  #   ports:
+  #     - "11435:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   environment:
+  #     - OLLAMA_HOST=0.0.0.0
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #   networks:
+  #     - shopping-network
+
+  # FastAPI application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shopping-api
+    ports:
+      - "8002:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=false
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - PURCHASE_DATA_PATH=/app/data/raw/customer_purchase_data.csv
+      - REVIEW_DATA_PATH=/app/data/raw/customer_reviews_data.csv
+      - VECTOR_INDEX_PATH=/app/data/embeddings/customer_index.faiss
+      - REDIS_URL=redis://host.docker.internal:6379
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=json
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - shopping-network
+    restart: unless-stopped
+
+  # Redis for caching (using host Redis)
+  # Uncomment to run Redis in Docker instead
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: shopping-redis
+  #   ports:
+  #     - "6380:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   command: redis-server --appendonly yes
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks:
+  #     - shopping-network
+  #   restart: unless-stopped
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: shopping-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - shopping-network
+    restart: unless-stopped
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: shopping-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - shopping-network
+    restart: unless-stopped
+
+volumes:
+  ollama-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  shopping-network:
+    driver: bridge
