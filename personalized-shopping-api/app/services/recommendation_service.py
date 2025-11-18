@@ -24,7 +24,8 @@ from app.repositories.review_repository import ReviewRepository
 from app.models.sentiment_analyzer import SentimentAnalyzer
 from app.core.config import settings
 from app.core.exceptions import NotFoundException, ValidationException
-from app.agents.intent_classifier_agent import IntentClassifierAgent, QueryIntent
+from app.agents.intent_classifier_agent_v2 import IntentClassifierAgentV2
+from app.agents.intent_classifier_agent import QueryIntent  # Keep enum for compatibility
 from app.core.tracing import trace_span
 from app.capabilities.base import AgentContext
 from app.workflows.personalized_recommendation import PersonalizedRecommendationWorkflow
@@ -70,8 +71,8 @@ class RecommendationService:
         self.customer_repo = CustomerRepository()
         self.review_repo = ReviewRepository()
 
-        # Intent classification and query answering
-        self.intent_classifier_agent = IntentClassifierAgent()
+        # Intent classification and query answering (using V2 with PydanticAI)
+        self.intent_classifier_agent = IntentClassifierAgentV2()
         self.query_answering_service = QueryAnsweringService()
 
         # Initialize workflow

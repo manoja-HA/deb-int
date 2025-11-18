@@ -1,0 +1,30 @@
+id: response.generation
+version: "1.0.0"
+description: "Generate natural language explanations for product recommendations"
+model: "llama3.1:8b"
+temperature: 0.7
+max_tokens: 200
+
+variables:
+  system: []
+  user:
+    - customer_name
+    - price_segment
+    - favorite_categories
+    - purchase_frequency
+    - recommendations_text
+
+output_format: "string"
+output_constraints:
+  min_length: 50
+  max_length: 300
+
+tags:
+  - response
+  - explanation
+  - reasoning
+
+changelog:
+  - version: "1.0.0"
+    date: "2025-01-18"
+    changes: "Initial prompt version with PydanticAI migration"

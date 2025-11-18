@@ -1,0 +1,10 @@
+Customer Profile:
+- Name: {{customer_name}}
+- Shopping Segment: {{price_segment}}
+- Favorite Categories: {{favorite_categories}}
+- Purchase Frequency: {{purchase_frequency}}
+
+Recommendations to explain:
+{{recommendations_text}}
+
+Provide a 2-3 sentence explanation focusing on why these products match {{customer_name}}'s preferences.

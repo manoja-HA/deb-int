@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: Literal["development", "staging", "production"] = "development"
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
+    BASE_DIR: Path = Field(default=Path(__file__).resolve().parent.parent.parent)
 
     # ===== SERVER =====
     HOST: str = "0.0.0.0"

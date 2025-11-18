@@ -31,8 +31,8 @@ from app.capabilities.agents.product_scoring import (
     ProductScoringInput,
     ScoredProduct,
 )
-from app.capabilities.agents.response_generation import (
-    ResponseGenerationAgent,
+from app.capabilities.agents.response_generation_v2 import (
+    ResponseGenerationAgentV2,
     ResponseGenerationInput,
 )
 
@@ -89,7 +89,7 @@ class PersonalizedRecommendationWorkflow:
             sentiment_analyzer
         )
         self.product_scoring_agent = ProductScoringAgent()
-        self.response_generation_agent = ResponseGenerationAgent()
+        self.response_generation_agent = ResponseGenerationAgentV2()
 
         # Store repositories for data access between agents
         self.customer_repo = customer_repository

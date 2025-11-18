@@ -1,0 +1,46 @@
+id: intent.classification
+version: "1.0.0"
+description: "Classify query intent (informational vs recommendation)"
+model: "llama3.1:8b"
+temperature: 0.1  # Low temperature for consistent classification
+max_tokens: 150
+
+variables:
+  system: []
+  user:
+    - query
+
+output_format: "structured"
+output_schema: "IntentClassification"
+
+tags:
+  - intent
+  - classification
+  - routing
+
+examples:
+  - query: "what is the total purchase of Kenneth Martinez?"
+    expected:
+      intent: "informational"
+      category: "total_purchases"
+      confidence: 0.95
+      reasoning: "Query explicitly asks about total purchases"
+
+  - query: "recommend some products for Kenneth Martinez"
+    expected:
+      intent: "recommendation"
+      category: null
+      confidence: 0.98
+      reasoning: "Direct request for product recommendations"
+
+  - query: "how much money has John spent?"
+    expected:
+      intent: "informational"
+      category: "spending"
+      confidence: 0.92
+      reasoning: "Query asks about spending amount"
+
+changelog:
+  - version: "1.0.0"
+    date: "2025-01-18"
+    changes: "Initial prompt version with PydanticAI migration, removed manual JSON extraction"

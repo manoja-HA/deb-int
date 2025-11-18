@@ -3,22 +3,22 @@ version: '3.8'
 services:
   # Ollama LLM service (using host Ollama)
   # Uncomment to run Ollama in Docker instead
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: shopping-ollama
-  #   ports:
-  #     - "11435:11434"
-  #   volumes:
-  #     - ollama-data:/root/.ollama
-  #   environment:
-  #     - OLLAMA_HOST=0.0.0.0
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 5
-  #   networks:
-  #     - shopping-network
+  ollama:
+    image: ollama/ollama:latest
+    container_name: shopping-ollama
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - shopping-network
 
   # PostgreSQL for LangFuse
   langfuse-db:
@@ -110,22 +110,22 @@ services:
 
   # Redis for caching (using host Redis)
   # Uncomment to run Redis in Docker instead
-  # redis:
-  #   image: redis:7-alpine
-  #   container_name: shopping-redis
-  #   ports:
-  #     - "6380:6379"
-  #   volumes:
-  #     - redis-data:/data
-  #   command: redis-server --appendonly yes
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-  #   networks:
-  #     - shopping-network
-  #   restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    container_name: shopping-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shopping-network
+    restart: unless-stopped
 
   # Prometheus for metrics
   prometheus:
