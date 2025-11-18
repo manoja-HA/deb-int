@@ -7,13 +7,27 @@ from fastapi import APIRouter, Depends, HTTPException, status
 import logging
 
 from app.api.dependencies import get_customer_service
-from app.domain.schemas.customer import CustomerProfile, SimilarCustomer
+from app.domain.schemas.customer import CustomerProfile, CustomerProfileSummary, SimilarCustomer
 from app.services.customer_service import CustomerService
 from app.core.exceptions import NotFoundException
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/customers", tags=["customers"])
+
+@router.get(
+    "/",
+    response_model=List[CustomerProfileSummary],
+    status_code=status.HTTP_200_OK,
+    summary="Get all customers",
+    description="Get a list of all available customers with their basic information",
+)
+async def get_all_customers(
+    service: Annotated[CustomerService, Depends(get_customer_service)],
+) -> List[CustomerProfileSummary]:
+    """Get all available customers"""
+    customers = await service.get_all_customers()
+    return customers
 
 @router.get(
     "/{customer_id}/profile",

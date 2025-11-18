@@ -20,6 +20,53 @@ services:
   #   networks:
   #     - shopping-network
 
+  # PostgreSQL for LangFuse
+  langfuse-db:
+    image: postgres:15-alpine
+    container_name: langfuse-db
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=langfuse
+      - POSTGRES_USER=langfuse
+      - POSTGRES_PASSWORD=langfuse
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shopping-network
+    restart: unless-stopped
+
+  # LangFuse for LLM observability (v2)
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: langfuse
+    ports:
+      - "3002:3000"
+    environment:
+      - DATABASE_URL=postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      - NEXTAUTH_URL=http://localhost:3002
+      - NEXTAUTH_SECRET=mysecret
+      - SALT=mysalt
+      - ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000
+      - TELEMETRY_ENABLED=false
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=false
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/public/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - shopping-network
+    restart: unless-stopped
+
   # FastAPI application
   api:
     build:
@@ -38,11 +85,20 @@ services:
       - REDIS_URL=redis://host.docker.internal:6379
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json
+      # LangFuse configuration
+      - LANGFUSE_ENABLED=true
+      - LANGFUSE_HOST=http://langfuse:3000
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_ENVIRONMENT=development
+      - LANGFUSE_RELEASE=v1.0.0
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - langfuse
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -113,6 +169,7 @@ volumes:
   redis-data:
   prometheus-data:
   grafana-data:
+  langfuse-db-data:
 
 networks:
   shopping-network:

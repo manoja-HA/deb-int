@@ -6,11 +6,15 @@ pydantic>=2.7.4,<3.0.0
 pydantic-settings>=2.3.0
 
 # LangChain and LLM
-langchain>=0.3.0
-langchain-core>=0.3.0
-langchain-ollama>=0.3.0
-langgraph==0.2.62
-langsmith>=0.1.17,<0.2.0
+langchain>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-ollama>=0.2.0,<0.4.0
+langgraph>=0.2.0,<0.3.0
+langsmith>=0.1.17
+
+# Observability and Tracing
+langfuse>=2.0.0
+# langfuse-langchain>=2.60.0  # Commented out due to dependency conflicts with Anthropic/OpenAI packages
 
 # Vector store and embeddings
 chromadb>=0.4.0

@@ -157,8 +157,18 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = True
     ENABLE_TRACING: bool = False
 
+    # LangSmith (Legacy - consider migrating to LangFuse)
     LANGSMITH_API_KEY: Optional[str] = None
     LANGSMITH_PROJECT: str = "shopping-assistant-api"
+
+    # LangFuse (Recommended for LLM observability)
+    LANGFUSE_ENABLED: bool = False
+    LANGFUSE_PUBLIC_KEY: Optional[str] = None
+    LANGFUSE_SECRET_KEY: Optional[str] = None
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+    LANGFUSE_RELEASE: Optional[str] = None
+    LANGFUSE_ENVIRONMENT: str = "development"
+    LANGFUSE_DEBUG: bool = False
 
     # ===== RATE LIMITING =====
     RATE_LIMIT_ENABLED: bool = True

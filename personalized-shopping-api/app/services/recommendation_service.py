@@ -1,30 +1,52 @@
-"""Recommendation service - Orchestrates multi-agent workflow"""
+"""
+Recommendation service - Thin facade over workflow orchestration
+
+This service now acts as a thin adapter layer that:
+1. Handles intent classification (informational vs recommendation)
+2. Delegates to appropriate workflow or query answering service
+3. Maintains tracing and observability
+4. Provides backward compatibility with existing API
+"""
 
 from typing import Optional
 import time
 import logging
-from collections import Counter
+import uuid
 
 from app.domain.schemas.recommendation import RecommendationResponse
-from app.domain.schemas.product import ProductRecommendation
 from app.domain.schemas.customer import CustomerProfileSummary
 from app.services.customer_service import CustomerService
 from app.services.product_service import ProductService
+from app.services.query_answering_service import QueryAnsweringService
 from app.repositories.customer_repository import CustomerRepository
 from app.repositories.vector_repository import VectorRepository
 from app.repositories.review_repository import ReviewRepository
 from app.models.sentiment_analyzer import SentimentAnalyzer
-from app.models.llm_factory import get_llm, LLMType
 from app.core.config import settings
 from app.core.exceptions import NotFoundException, ValidationException
 from app.agents.intent_classifier_agent import IntentClassifierAgent, QueryIntent
-from app.services.query_answering_service import QueryAnsweringService
-from langchain_core.messages import HumanMessage
+from app.core.tracing import trace_span
+from app.capabilities.base import AgentContext
+from app.workflows.personalized_recommendation import PersonalizedRecommendationWorkflow
 
 logger = logging.getLogger(__name__)
 
+
 class RecommendationService:
-    """Recommendation service orchestrating multi-agent workflow"""
+    """
+    Recommendation service - Facade over workflows
+
+    This service routes requests to the appropriate workflow based on intent:
+    - INFORMATIONAL queries → QueryAnsweringService
+    - RECOMMENDATION queries → PersonalizedRecommendationWorkflow
+
+    The service is now a thin layer that:
+    - Handles customer lookup by name
+    - Performs intent classification
+    - Routes to workflows
+    - Maintains tracing/observability
+    - Ensures backward compatibility
+    """
 
     def __init__(
         self,
@@ -32,14 +54,33 @@ class RecommendationService:
         product_service: ProductService,
         vector_repository: VectorRepository,
     ):
+        """
+        Initialize the recommendation service
+
+        Args:
+            customer_service: Service for customer operations
+            product_service: Service for product operations
+            vector_repository: Repository for vector similarity search
+        """
         self.customer_service = customer_service
         self.product_service = product_service
         self.vector_repo = vector_repository
+
+        # Repositories
         self.customer_repo = CustomerRepository()
         self.review_repo = ReviewRepository()
-        self.sentiment_analyzer = SentimentAnalyzer(method="rule_based")
+
+        # Intent classification and query answering
         self.intent_classifier_agent = IntentClassifierAgent()
         self.query_answering_service = QueryAnsweringService()
+
+        # Initialize workflow
+        self.recommendation_workflow = PersonalizedRecommendationWorkflow(
+            customer_repository=self.customer_repo,
+            vector_repository=self.vector_repo,
+            review_repository=self.review_repo,
+            sentiment_analyzer=SentimentAnalyzer(method="rule_based"),
+        )
 
     async def get_personalized_recommendations(
         self,
@@ -49,266 +90,213 @@ class RecommendationService:
         top_n: int = 5,
         include_reasoning: bool = True,
     ) -> RecommendationResponse:
-        """Get personalized recommendations using multi-agent workflow"""
+        """
+        Get personalized recommendations using multi-agent workflow
+
+        This method acts as the main entry point for the /recommendations/personalized
+        endpoint. It:
+        1. Validates input
+        2. Classifies query intent (informational vs recommendation)
+        3. Routes to appropriate handler
+        4. Returns structured response
+
+        Args:
+            query: User's search/question query
+            customer_name: Customer name (mutually exclusive with customer_id)
+            customer_id: Customer ID (mutually exclusive with customer_name)
+            top_n: Number of recommendations to return (1-20)
+            include_reasoning: Whether to generate LLM-based reasoning
+
+        Returns:
+            RecommendationResponse with products and reasoning
+
+        Raises:
+            ValidationException: If neither customer_name nor customer_id provided
+            NotFoundException: If customer not found
+        """
         start_time = time.time()
-        agent_execution = []
+
+        # Generate session ID for tracing
+        session_id = f"req-{uuid.uuid4().hex[:8]}"
 
         # Validate input
         if not customer_name and not customer_id:
-            raise ValidationException("Either customer_name or customer_id must be provided")
-
-        try:
-            # STEP 0: Classify query intent using LLM-based agent
-            logger.info(f"[Intent Classification Agent] Analyzing query: '{query[:50]}...'")
-            intent_result = self.intent_classifier_agent.classify(query)
-            intent = intent_result.intent
-            category = intent_result.category
-            confidence = intent_result.confidence
-
-            logger.info(
-                f"[Intent Classification Agent] Detected: {intent.value} "
-                f"(confidence: {confidence:.2f}) - {intent_result.reasoning}"
+            raise ValidationException(
+                "Either customer_name or customer_id must be provided"
             )
 
-            # Get customer profile (needed for both paths)
-            if not customer_id and customer_name:
-                customer_id = self.customer_repo.get_customer_id_by_name(customer_name)
-                if not customer_id:
-                    raise NotFoundException("Customer", customer_name)
-
-            profile = await self.customer_service.get_customer_profile(customer_id)
-
-            # Route based on intent
-            if intent == QueryIntent.INFORMATIONAL:
-                logger.info(f"[Informational Query Agent] Generating answer for category: {category}")
-                return await self._handle_informational_query(
-                    query=query,
-                    profile=profile,
-                    category=category,
-                    extracted_info=intent_result.extracted_info,
-                    start_time=start_time,
+        # Main trace span for the entire request
+        with trace_span(
+            name="recommendation_workflow",
+            session_id=session_id,
+            user_id=customer_name or customer_id,
+            metadata={
+                "query": query,
+                "top_n": top_n,
+                "include_reasoning": include_reasoning,
+            },
+            tags=["recommendation", "workflow"],
+            input_data={
+                "query": query,
+                "customer_name": customer_name,
+                "customer_id": customer_id,
+                "top_n": top_n,
+            }
+        ) as main_trace:
+            try:
+                # ============================================================
+                # STEP 0: Intent Classification
+                # ============================================================
+                logger.info(
+                    f"[Intent Classification] Analyzing query: '{query[:50]}...'"
                 )
-            else:
-                # Continue with recommendation workflow
-                logger.info("[Recommendation Agent] Proceeding with recommendation workflow")
 
-            # AGENT 1: Customer Profiling (already done above)
-            agent_execution.append("customer_profiling")
-            logger.info(f"[Agent 1] Profile: {profile.total_purchases} purchases, {profile.price_segment} segment")
-
-            # AGENT 2: Similar Customer Discovery
-            agent_execution.append("similar_customer_discovery")
-            logger.info(f"[Agent 2] Finding similar customers")
-
-            similar_customers = await self.customer_service.get_similar_customers(
-                customer_id,
-                top_k=settings.SIMILARITY_TOP_K,
-            )
-            logger.info(f"[Agent 2] Found {len(similar_customers)} similar customers")
-
-            if not similar_customers:
-                raise ValidationException("No similar customers found")
-
-            # Get candidate products from similar customers
-            all_purchases = []
-            for sim_customer in similar_customers:
-                their_purchases = self.customer_repo.get_purchases_by_customer_id(
-                    sim_customer.customer_id
+                intent_result = self.intent_classifier_agent.classify(
+                    query,
+                    session_id=session_id,
+                    user_id=customer_name or customer_id
                 )
-                all_purchases.extend(their_purchases)
+                intent = intent_result.intent
+                category = intent_result.category
+                confidence = intent_result.confidence
 
-            # Exclude already purchased products
-            target_product_ids = set(p.product_id for p in profile.recent_purchases)
-            candidate_purchases = [p for p in all_purchases if p["product_id"] not in target_product_ids]
+                logger.info(
+                    f"[Intent Classification] Detected: {intent.value} "
+                    f"(confidence: {confidence:.2f}) - {intent_result.reasoning}"
+                )
 
-            logger.info(f"Found {len(candidate_purchases)} candidate products")
-
-            # AGENT 3: Review-Based Filtering
-            agent_execution.append("review_filtering")
-            logger.info(f"[Agent 3] Filtering products by sentiment")
-
-            # Aggregate products
-            import pandas as pd
-            if candidate_purchases:
-                df = pd.DataFrame(candidate_purchases)
-                products = df.groupby("product_id").agg({
-                    "product_name": "first",
-                    "product_category": "first",
-                    "price": "mean",
-                    "transaction_id": "count",
-                }).reset_index()
-                products.columns = ["product_id", "product_name", "product_category", "avg_price", "purchase_count"]
-                candidate_products = products.to_dict("records")
-            else:
-                candidate_products = []
-
-            # Filter by sentiment
-            filtered_products = []
-            filtered_out = 0
-
-            for product in candidate_products:
-                product_id = str(product["product_id"])
-                reviews = self.review_repo.get_by_product_id(product_id)
-
-                if reviews:
-                    review_texts = [r["review_text"] for r in reviews]
-                    sentiment_data = self.sentiment_analyzer.calculate_average_sentiment(
-                        review_texts,
-                        min_reviews=settings.MIN_PURCHASES_FOR_PROFILE,
+                # ============================================================
+                # STEP 1: Customer Lookup
+                # ============================================================
+                # Resolve customer_id if only name provided
+                if not customer_id and customer_name:
+                    customer_id = self.customer_repo.get_customer_id_by_name(
+                        customer_name
                     )
-                    avg_sentiment = sentiment_data["avg_sentiment"]
-                else:
-                    avg_sentiment = 0.5  # Neutral for products without reviews
+                    if not customer_id:
+                        raise NotFoundException("Customer", customer_name)
 
-                if avg_sentiment >= settings.SENTIMENT_THRESHOLD:
-                    product["avg_sentiment"] = avg_sentiment
-                    product["review_count"] = len(reviews) if reviews else 0
-                    filtered_products.append(product)
-                else:
-                    filtered_out += 1
-
-            logger.info(f"[Agent 3] Filtered to {len(filtered_products)} products (removed {filtered_out})")
-
-            # AGENT 4: Cross-Category Recommendation
-            agent_execution.append("recommendation")
-            logger.info(f"[Agent 4] Generating recommendations")
-
-            # Calculate collaborative filtering scores
-            product_purchase_counts = Counter(p["product_id"] for p in candidate_purchases)
-            max_count = max(product_purchase_counts.values()) if product_purchase_counts else 1
-
-            for product in filtered_products:
-                product_id = str(product["product_id"])
-                purchase_count = product_purchase_counts.get(product_id, 0)
-                product["collab_score"] = purchase_count / max_count
-                product["similar_customer_count"] = purchase_count
-
-                # Category affinity
-                category_score = self._calculate_category_affinity(
-                    profile.favorite_categories,
-                    product["product_category"]
-                )
-                product["category_score"] = category_score
-
-                # Final score
-                product["final_score"] = (
-                    settings.COLLABORATIVE_WEIGHT * product["collab_score"] +
-                    settings.CATEGORY_AFFINITY_WEIGHT * category_score +
-                    0.2 * product.get("avg_sentiment", 0.5)
-                )
-
-            # Sort and get top N
-            sorted_products = sorted(filtered_products, key=lambda x: x["final_score"], reverse=True)
-
-            # Add diversity (max 2 per category)
-            category_counts = Counter()
-            final_products = []
-            for product in sorted_products:
-                category = product["product_category"]
-                if category_counts[category] < 2:
-                    final_products.append(product)
-                    category_counts[category] += 1
-                if len(final_products) >= top_n:
-                    break
-
-            # Build recommendations
-            recommendations = []
-            for product in final_products:
-                # Determine reason
-                if product["collab_score"] > 0.7:
-                    source = "collaborative"
-                    reason = f"Highly popular with {product['similar_customer_count']} similar customers"
-                elif product["category_score"] > 0.8:
-                    source = "category_affinity"
-                    reason = f"Matches your preference for {product['product_category']}"
-                else:
-                    source = "trending"
-                    reason = "Good balance of popularity and category fit"
-
-                if product.get("avg_sentiment", 0) > 0.8:
-                    reason += f" with excellent reviews ({product['avg_sentiment']:.0%} positive)"
-
-                recommendations.append(
-                    ProductRecommendation(
-                        product_id=str(product["product_id"]),
-                        product_name=product["product_name"],
-                        product_category=product["product_category"],
-                        avg_price=float(product["avg_price"]),
-                        recommendation_score=product["final_score"],
-                        reason=reason,
-                        similar_customer_count=product["similar_customer_count"],
-                        avg_sentiment=product.get("avg_sentiment", 0.5),
-                        source=source,
+                # ============================================================
+                # STEP 2: Route based on intent
+                # ============================================================
+                if intent == QueryIntent.INFORMATIONAL:
+                    # Route to query answering service
+                    logger.info(
+                        f"[Informational Query] Routing to QueryAnsweringService "
+                        f"for category: {category}"
                     )
-                )
 
-            logger.info(f"[Agent 4] Generated {len(recommendations)} recommendations")
+                    result = await self._handle_informational_query(
+                        query=query,
+                        customer_id=customer_id,
+                        customer_name=customer_name,
+                        category=category,
+                        extracted_info=intent_result.extracted_info,
+                        start_time=start_time,
+                        session_id=session_id,
+                    )
 
-            # AGENT 5: Response Generation
-            agent_execution.append("response_generation")
-            logger.info(f"[Agent 5] Generating natural language response")
+                    # Update trace
+                    if main_trace:
+                        main_trace.update(output={
+                            "intent": "informational",
+                            "category": category.value if category else None,
+                            "answer_length": len(result.reasoning),
+                        })
 
-            if include_reasoning and recommendations:
-                reasoning = await self._generate_reasoning(query, profile, recommendations, similar_customers)
-            else:
-                reasoning = f"Based on {profile.customer_name}'s purchase history, here are {len(recommendations)} recommendations."
+                    return result
 
-            # Build response
-            processing_time_ms = (time.time() - start_time) * 1000
+                else:
+                    # Route to recommendation workflow
+                    logger.info(
+                        "[Recommendation Query] Routing to PersonalizedRecommendationWorkflow"
+                    )
 
-            response = RecommendationResponse(
-                query=query,
-                customer_profile=CustomerProfileSummary(
-                    customer_id=profile.customer_id,
-                    customer_name=profile.customer_name,
-                    total_purchases=profile.total_purchases,
-                    avg_purchase_price=profile.avg_purchase_price,
-                    favorite_categories=profile.favorite_categories,
-                    price_segment=profile.price_segment,
-                    purchase_frequency=profile.purchase_frequency,
-                ),
-                recommendations=recommendations,
-                reasoning=reasoning,
-                confidence_score=min(len(similar_customers) / 20.0, 1.0),
-                processing_time_ms=processing_time_ms,
-                similar_customers_analyzed=len(similar_customers),
-                products_considered=len(candidate_products),
-                products_filtered_by_sentiment=filtered_out,
-                recommendation_strategy="collaborative_with_category_affinity",
-                agent_execution_order=agent_execution,
-                metadata={
-                    "fallback_used": False,
-                },
-            )
+                    # Create agent context
+                    context = AgentContext(
+                        request_id=session_id,
+                        session_id=session_id,
+                        user_id=customer_id,
+                        metadata={
+                            "customer_name": customer_name,
+                            "query": query,
+                        },
+                    )
 
-            logger.info(f"[Complete] Processed in {processing_time_ms:.0f}ms")
-            return response
+                    # Execute workflow
+                    result = await self.recommendation_workflow.execute(
+                        customer_id=customer_id,
+                        query=query,
+                        top_n=top_n,
+                        include_reasoning=include_reasoning,
+                        context=context,
+                    )
 
-        except Exception as e:
-            logger.error(f"Recommendation workflow failed: {e}", exc_info=True)
-            raise
+                    # Update trace
+                    if main_trace:
+                        main_trace.update(output={
+                            "intent": "recommendation",
+                            "recommendations_count": len(result.recommendations),
+                            "processing_time_ms": result.processing_time_ms,
+                            "confidence_score": result.confidence_score,
+                        })
+
+                    return result
+
+            except Exception as e:
+                # Log error and update trace
+                logger.error(f"Recommendation workflow failed: {e}", exc_info=True)
+
+                if main_trace:
+                    main_trace.update(output={
+                        "error": str(e),
+                        "success": False,
+                    })
+
+                raise
 
     async def _handle_informational_query(
         self,
         query: str,
-        profile,
+        customer_id: str,
+        customer_name: Optional[str],
         category,
-        extracted_info: dict,
+        extracted_info,
         start_time: float,
+        session_id: str,
     ) -> RecommendationResponse:
-        """Handle informational queries by answering questions about customer data"""
+        """
+        Handle informational queries (e.g., "How much have I spent?")
+
+        Args:
+            query: User's query
+            customer_id: Customer ID
+            customer_name: Customer name (optional)
+            category: Information category from intent classifier
+            extracted_info: Extracted information dict
+            start_time: Request start time
+            session_id: Tracing session ID
+
+        Returns:
+            RecommendationResponse with answer in reasoning field (no products)
+        """
+        # Get customer profile
+        profile = await self.customer_service.get_customer_profile(customer_id)
+
         # Generate answer using query answering service
         answer = await self.query_answering_service.answer_query(
             query=query,
             profile=profile,
             category=category,
             extracted_info=extracted_info,
+            session_id=session_id,
         )
 
-        # Build response (informational responses have no recommendations)
+        # Calculate processing time
         processing_time_ms = (time.time() - start_time) * 1000
 
-        response = RecommendationResponse(
+        # Return response with answer (no recommendations)
+        return RecommendationResponse(
             query=query,
             customer_profile=CustomerProfileSummary(
                 customer_id=profile.customer_id,
@@ -319,59 +307,18 @@ class RecommendationService:
                 price_segment=profile.price_segment,
                 purchase_frequency=profile.purchase_frequency,
             ),
-            recommendations=[],  # No recommendations for informational queries
-            reasoning=answer,  # The answer goes in the reasoning field
-            confidence_score=1.0,  # High confidence for factual data
+            recommendations=[],  # No products for informational queries
+            reasoning=answer,
+            confidence_score=0.9,  # High confidence for factual answers
             processing_time_ms=processing_time_ms,
             similar_customers_analyzed=0,
             products_considered=0,
             products_filtered_by_sentiment=0,
             recommendation_strategy="informational_query",
-            agent_execution_order=["query_classification", "customer_profiling", "query_answering"],
+            agent_execution_order=["intent_classification", "query_answering"],
             metadata={
-                "query_intent": "informational",
-                "information_category": category.value if category else "general",
+                "intent": "informational",
+                "category": category.value if category else None,
+                "session_id": session_id,
             },
         )
-
-        logger.info(f"[Informational Query Complete] Processed in {processing_time_ms:.0f}ms")
-        return response
-
-    def _calculate_category_affinity(self, target_categories: list, product_category: str) -> float:
-        """Calculate category affinity score"""
-        if not target_categories:
-            return 0.5
-
-        if product_category in target_categories:
-            position = target_categories.index(product_category)
-            return 1.0 - (position * 0.2)
-
-        return 0.2
-
-    async def _generate_reasoning(self, query: str, profile, recommendations, similar_customers) -> str:
-        """Generate natural language reasoning using LLM"""
-        try:
-            context = f"Customer: {profile.customer_name}, {profile.purchase_frequency} buyer, {profile.price_segment} segment, Favorite categories: {', '.join(profile.favorite_categories)}"
-
-            rec_text = "\n".join([
-                f"{i+1}. {rec.product_name} (${rec.avg_price:.2f}): {rec.reason}"
-                for i, rec in enumerate(recommendations[:3])
-            ])
-
-            prompt = f"""Based on the customer's purchase history, provide a brief explanation for these recommendations.
-
-{context}
-
-Recommendations:
-{rec_text}
-
-Provide a 2-3 sentence explanation focusing on why these products match the customer's preferences."""
-
-            llm = get_llm(LLMType.RESPONSE)
-            response = llm.invoke([HumanMessage(content=prompt)])
-
-            return response.content.strip()
-
-        except Exception as e:
-            logger.warning(f"LLM reasoning generation failed: {e}")
-            return f"Based on {profile.customer_name}'s purchase history of {', '.join(profile.favorite_categories)} products, these recommendations match their {profile.price_segment} price segment preferences."

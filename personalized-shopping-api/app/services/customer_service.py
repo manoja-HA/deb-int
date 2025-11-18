@@ -3,7 +3,7 @@
 from typing import List, Optional
 import logging
 
-from app.domain.schemas.customer import CustomerProfile, SimilarCustomer, Purchase
+from app.domain.schemas.customer import CustomerProfile, CustomerProfileSummary, SimilarCustomer, Purchase
 from app.repositories.customer_repository import CustomerRepository
 from app.repositories.vector_repository import VectorRepository
 from app.core.exceptions import NotFoundException
@@ -22,6 +22,58 @@ class CustomerService:
     ):
         self.customer_repo = customer_repository
         self.vector_repo = vector_repository
+
+    async def get_all_customers(self) -> List[CustomerProfileSummary]:
+        """Get all available customers with basic information"""
+        customers_data = self.customer_repo.get_all()
+
+        customers = []
+        for customer in customers_data:
+            # Get purchases to calculate additional metrics
+            purchases = self.customer_repo.get_purchases_by_customer_id(customer["customer_id"])
+
+            if not purchases:
+                continue
+
+            import pandas as pd
+            df = pd.DataFrame(purchases)
+
+            # Calculate metrics
+            avg_price = float(df["price"].mean())
+            total_purchases = len(purchases)
+
+            # Get favorite categories
+            category_counts = df["product_category"].value_counts()
+            favorite_categories = category_counts.head(3).index.tolist()
+
+            # Determine segments
+            if total_purchases > 10:
+                frequency = "high"
+            elif total_purchases >= 3:
+                frequency = "medium"
+            else:
+                frequency = "low"
+
+            if avg_price < 200:
+                price_segment = "budget"
+            elif avg_price < 600:
+                price_segment = "mid-range"
+            else:
+                price_segment = "premium"
+
+            customer_summary = CustomerProfileSummary(
+                customer_id=customer["customer_id"],
+                customer_name=customer["customer_name"],
+                total_purchases=total_purchases,
+                avg_purchase_price=avg_price,
+                favorite_categories=favorite_categories,
+                price_segment=price_segment,
+                purchase_frequency=frequency,
+            )
+
+            customers.append(customer_summary)
+
+        return customers
 
     async def get_customer_profile(self, customer_id: str) -> CustomerProfile:
         """Get complete customer profile"""

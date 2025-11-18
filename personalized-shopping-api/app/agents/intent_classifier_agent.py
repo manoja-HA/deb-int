@@ -5,7 +5,7 @@ Uses LangGraph to classify query intent and determine routing
 
 import json
 import logging
-from typing import Dict, Any, Literal, TypedDict, Annotated
+from typing import Dict, Any, Literal, TypedDict, Annotated, Optional
 from enum import Enum
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,6 +13,7 @@ from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
 
 from app.models.llm_factory import get_llm, LLMType
+from app.core.tracing import trace_span, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class AgentState(TypedDict):
     query: str
     classification_result: Dict[str, Any] | None
     error: str | None
+    session_id: Optional[str]
+    user_id: Optional[str]
 
 
 class IntentClassifierAgent:
@@ -69,11 +72,30 @@ class IntentClassifierAgent:
         self.llm = None
         self.graph = self._build_graph()
 
-    def _get_llm(self):
-        """Lazy load LLM"""
-        if self.llm is None:
-            self.llm = get_llm(LLMType.RESPONSE)
-        return self.llm
+    def _get_llm(
+        self,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Get LLM with tracing support
+
+        Args:
+            session_id: Session ID for tracing
+            user_id: User ID for tracing
+            metadata: Additional metadata for tracing
+        """
+        return get_llm(
+            LLMType.RESPONSE,
+            session_id=session_id,
+            user_id=user_id,
+            metadata={
+                "agent": "intent_classifier",
+                **(metadata or {})
+            },
+            tags=["intent_classification", "agent"]
+        )
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow"""
@@ -94,9 +116,12 @@ class IntentClassifierAgent:
 
     def _classify_intent_node(self, state: AgentState) -> AgentState:
         """
-        Node to classify the intent using LLM
+        Node to classify the intent using LLM with tracing
         """
         query = state["query"]
+        session_id = state.get("session_id")
+        user_id = state.get("user_id")
+
         logger.info(f"[Intent Agent] Classifying query: '{query[:50]}...'")
 
         system_prompt = """You are an intelligent query classifier for a personalized shopping assistant API.
@@ -138,7 +163,11 @@ Now classify the following query. Respond ONLY with valid JSON, no additional te
         user_prompt = f"Query: {query}"
 
         try:
-            llm = self._get_llm()
+            llm = self._get_llm(
+                session_id=session_id,
+                user_id=user_id,
+                metadata={"query": query[:100]}
+            )
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
@@ -161,11 +190,36 @@ Now classify the following query. Respond ONLY with valid JSON, no additional te
                 f"(confidence: {result['confidence']:.2f})"
             )
 
+            # Log classification event to LangFuse
+            log_event(
+                name="intent_classified",
+                metadata={
+                    "query": query,
+                    "intent": result['intent'],
+                    "category": result.get('category'),
+                    "confidence": result['confidence'],
+                    "reasoning": result.get('reasoning', '')
+                },
+                level="DEFAULT"
+            )
+
             state["classification_result"] = result
             state["error"] = None
 
         except Exception as e:
             logger.error(f"[Intent Agent] Classification failed: {e}")
+
+            # Log error event to LangFuse
+            log_event(
+                name="intent_classification_error",
+                metadata={
+                    "query": query,
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                },
+                level="ERROR"
+            )
+
             # Fallback to recommendation if classification fails
             state["classification_result"] = {
                 "intent": "recommendation",
@@ -226,58 +280,101 @@ Now classify the following query. Respond ONLY with valid JSON, no additional te
 
         return state
 
-    def classify(self, query: str) -> IntentClassificationResult:
+    def classify(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> IntentClassificationResult:
         """
         Classify a query using the LLM-based agent
 
         Args:
             query: The user's query to classify
+            session_id: Session ID for tracing
+            user_id: User ID for tracing
 
         Returns:
             IntentClassificationResult with classification details
         """
-        initial_state = AgentState(
-            query=query,
-            classification_result=None,
-            error=None
-        )
-
-        # Run the graph
-        final_state = self.graph.invoke(initial_state)
-
-        # Convert to result object
-        result_dict = final_state["classification_result"]
-
-        try:
-            return IntentClassificationResult(
-                intent=QueryIntent(result_dict["intent"]),
-                category=InformationCategory(result_dict["category"]) if result_dict.get("category") else None,
-                confidence=result_dict["confidence"],
-                reasoning=result_dict.get("reasoning", ""),
-                extracted_info=result_dict.get("extracted_info", {})
-            )
-        except Exception as e:
-            logger.error(f"[Intent Agent] Failed to parse result: {e}")
-            # Return safe fallback
-            return IntentClassificationResult(
-                intent=QueryIntent.RECOMMENDATION,
-                category=None,
-                confidence=0.5,
-                reasoning=f"Fallback due to parsing error: {str(e)}",
-                extracted_info={}
+        with trace_span(
+            name="intent_classification",
+            session_id=session_id,
+            user_id=user_id,
+            metadata={"query": query},
+            tags=["agent", "intent_classification"],
+            input_data={"query": query}
+        ) as trace:
+            initial_state = AgentState(
+                query=query,
+                classification_result=None,
+                error=None,
+                session_id=session_id,
+                user_id=user_id
             )
 
-    def classify_dict(self, query: str) -> Dict[str, Any]:
+            # Run the graph
+            final_state = self.graph.invoke(initial_state)
+
+            # Convert to result object
+            result_dict = final_state["classification_result"]
+
+            try:
+                result = IntentClassificationResult(
+                    intent=QueryIntent(result_dict["intent"]),
+                    category=InformationCategory(result_dict["category"]) if result_dict.get("category") else None,
+                    confidence=result_dict["confidence"],
+                    reasoning=result_dict.get("reasoning", ""),
+                    extracted_info=result_dict.get("extracted_info", {})
+                )
+
+                # Update trace with output
+                if trace:
+                    trace.update(output={
+                        "intent": result.intent.value,
+                        "category": result.category.value if result.category else None,
+                        "confidence": result.confidence
+                    })
+
+                return result
+
+            except Exception as e:
+                logger.error(f"[Intent Agent] Failed to parse result: {e}")
+
+                # Update trace with error
+                if trace:
+                    trace.update(
+                        level="ERROR",
+                        output={"error": str(e), "error_type": type(e).__name__}
+                    )
+
+                # Return safe fallback
+                return IntentClassificationResult(
+                    intent=QueryIntent.RECOMMENDATION,
+                    category=None,
+                    confidence=0.5,
+                    reasoning=f"Fallback due to parsing error: {str(e)}",
+                    extracted_info={}
+                )
+
+    def classify_dict(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Classify a query and return as dictionary (for backward compatibility)
 
         Args:
             query: The user's query to classify
+            session_id: Session ID for tracing
+            user_id: User ID for tracing
 
         Returns:
             Dictionary with classification details
         """
-        result = self.classify(query)
+        result = self.classify(query, session_id=session_id, user_id=user_id)
         return {
             "intent": result.intent,
             "category": result.category,
