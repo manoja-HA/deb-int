@@ -1,0 +1,46 @@
+version: '3'
+
+vars:
+  HELM_VERSION: 3.17.0
+  K3D_VERSION: 5.8.3
+  K9S_VERSION: 0.50.6
+  KUBECTL_VERSION: 1.31.0
+  TILT_VERSION: 0.35.0
+
+tasks:
+  helm:
+    dir: /tmp
+    cmds:
+      - curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+      - chmod 700 get_helm.sh
+      - ./get_helm.sh --version v{{.HELM_VERSION}}
+
+  k3d:
+    dir: /tmp
+    cmds:
+      - curl -s -o install_k3d.sh https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+      - chmod +x install_k3d.sh
+      - TAG=v{{.K3D_VERSION}} ./install_k3d.sh
+
+  k9s:
+    dir: /tmp
+    cmds:
+      - rm -f k9s_Linux_amd64.tar.gz
+      - wget https://github.com/derailed/k9s/releases/download/v{{.K9S_VERSION}}/k9s_Linux_amd64.tar.gz
+      - tar -xzvf k9s_Linux_amd64.tar.gz
+      - sudo mv k9s /usr/local/bin/
+      - mkdir -p ~/.config/k9s
+      - sudo wget -O ~/.config/k9s/skin.yml https://raw.githubusercontent.com/derailed/k9s/master/skins/solarized_light.yml
+
+  kubectl:
+    dir: /tmp
+    cmds:
+      - curl -LO "https://dl.k8s.io/release/v{{.KUBECTL_VERSION}}/bin/linux/amd64/kubectl"
+      - sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+      - echo 'source <(kubectl completion bash)' >>~/.bashrc
+
+  tilt:
+    dir: /tmp
+    cmds:
+      - curl -fsSL https://github.com/tilt-dev/tilt/releases/download/v{{.TILT_VERSION}}/tilt.{{.TILT_VERSION}}.linux.x86_64.tar.gz | tar -xzv tilt
+      - sudo mv tilt /usr/local/bin/tilt
