@@ -80,11 +80,22 @@ class IntentClassification(BaseModel):
 # Load prompts from centralized system
 prompt_loader = get_prompt_loader()
 intent_prompt = prompt_loader.load_prompt("intent.classification")
+_configured_intent_model = (settings.response_model or "").strip()
+_prompt_default_intent_model = intent_prompt.metadata.model
+
+if _configured_intent_model and _configured_intent_model != _prompt_default_intent_model:
+    logger.info(
+        "Intent classifier using configured model '%s' (prompt default '%s')",
+        _configured_intent_model,
+        _prompt_default_intent_model,
+    )
+
+intent_model_name = _configured_intent_model or _prompt_default_intent_model
 
 # Create PydanticAI agent with structured output
 intent_pydantic_agent = PydanticAgent(
     model=OllamaModel(
-        model_name=intent_prompt.metadata.model,
+        model_name=intent_model_name,
         base_url=settings.OLLAMA_BASE_URL,
     ),
     result_type=IntentClassification,  # ✅ Automatic validation!

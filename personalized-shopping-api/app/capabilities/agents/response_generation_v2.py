@@ -63,11 +63,22 @@ class ResponseGenerationOutput(BaseModel):
 # Load prompts from centralized system
 prompt_loader = get_prompt_loader()
 response_prompt = prompt_loader.load_prompt("response.generation")
+_configured_response_model = (settings.response_model or "").strip()
+_prompt_default_response_model = response_prompt.metadata.model
+
+if _configured_response_model and _configured_response_model != _prompt_default_response_model:
+    logger.info(
+        "Response generation agent using configured model '%s' (prompt default '%s')",
+        _configured_response_model,
+        _prompt_default_response_model,
+    )
+
+response_model_name = _configured_response_model or _prompt_default_response_model
 
 # Create PydanticAI agent with structured output
 response_pydantic_agent = PydanticAgent(
     model=OllamaModel(
-        model_name=response_prompt.metadata.model,
+        model_name=response_model_name,
         base_url=settings.OLLAMA_BASE_URL,
     ),
     result_type=str,  # Return string explanation

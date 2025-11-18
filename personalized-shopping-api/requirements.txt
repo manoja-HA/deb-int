@@ -13,8 +13,7 @@ langgraph>=0.2.0,<0.3.0
 langsmith>=0.1.17
 
 # PydanticAI for structured LLM agents
-pydantic-ai>=0.0.14
-pydantic-ai-slim>=0.0.14
+pydantic-ai>=1.19.0
 
 # Observability and Tracing
 langfuse>=2.0.0
