@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.models.llm_factory import get_llm, LLMType
 from app.core.tracing import trace_span, log_event
+from app.prompts import get_prompt_loader
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,9 @@ class IntentClassifierAgent:
     def __init__(self):
         self.llm = None
         self.graph = self._build_graph()
+        # Load prompts from centralized prompt system
+        self.prompt_loader = get_prompt_loader()
+        self.prompt_data = self.prompt_loader.load_prompt("intent.classification")
 
     def _get_llm(
         self,
@@ -87,7 +91,7 @@ class IntentClassifierAgent:
             metadata: Additional metadata for tracing
         """
         return get_llm(
-            LLMType.RESPONSE,
+            LLMType.INTENT,
             session_id=session_id,
             user_id=user_id,
             metadata={
@@ -124,43 +128,9 @@ class IntentClassifierAgent:
 
         logger.info(f"[Intent Agent] Classifying query: '{query[:50]}...'")
 
-        system_prompt = """You are an intelligent query classifier for a personalized shopping assistant API.
-
-Your task is to analyze user queries and classify them into two main categories:
-
-1. **INFORMATIONAL** - Questions asking about customer data:
-   - Total purchases (e.g., "how many items has X bought?")
-   - Spending (e.g., "how much has X spent?", "what's the total amount?")
-   - Favorite categories (e.g., "what categories does X like?")
-   - Recent purchases (e.g., "what did X buy recently?")
-   - Customer profile (e.g., "tell me about X", "show X's profile")
-   - General questions about customer data
-
-2. **RECOMMENDATION** - Requests for product suggestions:
-   - Direct requests for recommendations
-   - Questions about what to buy
-   - Requests for product suggestions
-   - Questions about what customer would like
-
-Analyze the query and respond with a JSON object with these fields:
-- intent: "informational" or "recommendation"
-- category: if informational, one of: "total_purchases", "spending", "favorite_categories", "recent_purchases", "customer_profile", "general"
-- confidence: a number between 0 and 1
-- reasoning: brief explanation of your classification
-
-Examples:
-Query: "what is the total purchase of Kenneth Martinez?"
-Response: {"intent": "informational", "category": "total_purchases", "confidence": 0.95, "reasoning": "Query explicitly asks about total purchases"}
-
-Query: "recommend some products for Kenneth Martinez"
-Response: {"intent": "recommendation", "category": null, "confidence": 0.98, "reasoning": "Direct request for product recommendations"}
-
-Query: "how much money has John spent?"
-Response: {"intent": "informational", "category": "spending", "confidence": 0.92, "reasoning": "Query asks about spending amount"}
-
-Now classify the following query. Respond ONLY with valid JSON, no additional text."""
-
-        user_prompt = f"Query: {query}"
+        # Use prompts from centralized prompt system
+        system_prompt = self.prompt_data.system
+        user_prompt = self.prompt_loader.render_user_prompt("intent.classification", query=query)
 
         try:
             llm = self._get_llm(

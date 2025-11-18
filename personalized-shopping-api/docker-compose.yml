@@ -79,10 +79,12 @@ services:
       - ENVIRONMENT=development
       - DEBUG=false
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Use offline embedding model from local directory mounted at /app/models
+      - EMBEDDING_MODEL=/app/models/bge-base-en-v1.5
       - PURCHASE_DATA_PATH=/app/data/raw/customer_purchase_data.csv
       - REVIEW_DATA_PATH=/app/data/raw/customer_reviews_data.csv
       - VECTOR_INDEX_PATH=/app/data/embeddings/customer_index.faiss
-      - REDIS_URL=redis://host.docker.internal:6379
+      - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json
       # LangFuse configuration
@@ -95,10 +97,13 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      # Mount local models directory for offline embeddings
+      - ./models:/app/models
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - langfuse
+      - redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -108,8 +113,8 @@ services:
       - shopping-network
     restart: unless-stopped
 
-  # Redis for caching (using host Redis)
-  # Uncomment to run Redis in Docker instead
+  # Redis for caching
+  # Used by API via REDIS_URL=redis://redis:6379
   redis:
     image: redis:7-alpine
     container_name: shopping-redis

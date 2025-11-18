@@ -89,6 +89,10 @@ class Settings(BaseSettings):
         return self.RESPONSE_MODEL
 
     @property
+    def intent_model(self) -> str:
+        return self.INTENT_MODEL
+
+    @property
     def ollama_base_url(self) -> str:
         return self.OLLAMA_BASE_URL
 
@@ -120,6 +124,7 @@ class Settings(BaseSettings):
     SENTIMENT_MODEL: str = "llama3.1:8b"
     RECOMMENDATION_MODEL: str = "llama3.1:8b"
     RESPONSE_MODEL: str = "llama3.1:8b"
+    INTENT_MODEL: str = "llama3.1:8b"  # For intent classification
 
     MAX_TOKENS: int = 2048
     TEMPERATURE: float = 0.1

@@ -89,6 +89,7 @@ class PersonalizedRecommendationWorkflow:
             sentiment_analyzer
         )
         self.product_scoring_agent = ProductScoringAgent()
+        # Use PydanticAI-based response generation agent (V2) with Ollama
         self.response_generation_agent = ResponseGenerationAgentV2()
 
         # Store repositories for data access between agents

@@ -18,6 +18,7 @@ async def startup_event_handler() -> None:
 
     Responsibilities:
     - Setup logging
+    - Register agents
     - Load vector store
     - Warm up models
     - Initialize caches
@@ -32,6 +33,11 @@ async def startup_event_handler() -> None:
     logger.info(f"API version: {settings.VERSION}")
 
     try:
+        # Register agents with AgentRegistry for discovery
+        from app.capabilities import register_all_agents
+        register_all_agents()
+        logger.info("Registered all production agents")
+
         # Load vector store
         await load_vector_store()
 

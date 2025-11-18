@@ -71,7 +71,7 @@ class RecommendationService:
         self.customer_repo = CustomerRepository()
         self.review_repo = ReviewRepository()
 
-        # Intent classification and query answering (using V2 with PydanticAI)
+        # Intent classification and query answering (using V2 with PydanticAI + Ollama)
         self.intent_classifier_agent = IntentClassifierAgentV2()
         self.query_answering_service = QueryAnsweringService()
 
@@ -152,7 +152,7 @@ class RecommendationService:
                     f"[Intent Classification] Analyzing query: '{query[:50]}...'"
                 )
 
-                intent_result = self.intent_classifier_agent.classify(
+                intent_result = await self.intent_classifier_agent.classify(
                     query,
                     session_id=session_id,
                     user_id=customer_name or customer_id

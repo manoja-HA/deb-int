@@ -1,5 +1,1 @@
-Classify the following customer query:
-
-Query: "{{query}}"
-
-Provide your classification in the exact format specified by the result schema.
+Query: {{query}}

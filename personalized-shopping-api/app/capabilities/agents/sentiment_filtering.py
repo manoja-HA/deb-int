@@ -47,9 +47,9 @@ class SentimentFilteringInput(BaseModel):
         description="Minimum sentiment score to pass filter"
     )
     min_reviews: int = Field(
-        default=settings.MIN_PURCHASES_FOR_PROFILE,
+        default=settings.MIN_REVIEWS_FOR_INCLUSION,
         ge=0,
-        description="Minimum reviews required for sentiment calculation"
+        description="Minimum number of reviews required for including product in sentiment calculation"
     )
 
 

@@ -13,14 +13,8 @@ from typing import Optional, Literal
 import logging
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent as PydanticAgent
-from pydantic_ai import exceptions as pydantic_ai_exceptions
-
-try:
-    # Newer pydantic-ai versions may not ship provider models
-    # in this namespace; we handle that gracefully below.
-    from pydantic_ai.models.ollama import OllamaModel  # type: ignore[import]
-except Exception:  # pragma: no cover - environment dependent
-    OllamaModel = None  # type: ignore[assignment]
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.ollama import OllamaProvider
 
 from app.prompts import get_prompt_loader
 from app.core.config import settings
@@ -99,41 +93,24 @@ if _configured_intent_model and _configured_intent_model != _prompt_default_inte
 
 intent_model_name = _configured_intent_model or _prompt_default_intent_model
 
-# Create PydanticAI agent with structured output
-if OllamaModel is not None:
-    intent_model_config = OllamaModel(
-        model_name=intent_model_name,
-        base_url=settings.OLLAMA_BASE_URL,
-    )
-else:  # Fallback for environments without OllamaModel helper
-    logger.warning(
-        "pydantic_ai.models.ollama.OllamaModel not available; "
-        "falling back to model spec 'ollama:%s'. "
-        "Ensure the PydanticAI Ollama provider is installed.",
-        intent_model_name,
-    )
-    intent_model_config = f"ollama:{intent_model_name}"
+# Configure Ollama provider for PydanticAI
+_ollama_base = settings.OLLAMA_BASE_URL.rstrip("/")
+if not _ollama_base.endswith("/v1"):
+    _ollama_base = f"{_ollama_base}/v1"
 
-try:
-    # Newer PydanticAI versions may not accept `result_type` kwarg.
-    intent_pydantic_agent = PydanticAgent(
-        model=intent_model_config,
-        result_type=IntentClassification,  # Preferred when supported
-        system_prompt=intent_prompt.system,
-    )
-except pydantic_ai_exceptions.UserError as e:
-    # Fallback: construct agent without typed result and validate manually.
-    if "result_type" not in str(e):
-        raise
-    logger.warning(
-        "PydanticAI Agent does not support `result_type` keyword; "
-        "falling back to untyped agent and manual validation. Error: %s",
-        e,
-    )
-    intent_pydantic_agent = PydanticAgent(
-        model=intent_model_config,
-        system_prompt=intent_prompt.system,
-    )
+_ollama_provider = OllamaProvider(base_url=_ollama_base)
+
+intent_model_config = OpenAIChatModel(
+    model_name=intent_model_name,
+    provider=_ollama_provider,
+)
+
+# Create PydanticAI agent with structured, typed output
+intent_pydantic_agent = PydanticAgent(
+    intent_model_config,
+    output_type=IntentClassification,
+    system_prompt=intent_prompt.system,
+)
 
 
 # ============================================================================
@@ -192,25 +169,8 @@ class IntentClassifierAgentV2:
         # Run PydanticAI agent
         result = await intent_pydantic_agent.run(user_prompt)
 
-        # Prefer typed result when available; otherwise parse manually.
-        data = result.data
-        if isinstance(data, IntentClassification):
-            classification = data
-        else:
-            # When no typed result is configured, PydanticAI returns raw text.
-            # Expect JSON per prompt and validate via IntentClassification.
-            from json import loads
-
-            text = str(data).strip()
-            json_start = text.find("{")
-            json_end = text.rfind("}") + 1
-            if json_start != -1 and json_end > json_start:
-                json_text = text[json_start:json_end]
-            else:
-                json_text = text
-
-            payload = loads(json_text)
-            classification = IntentClassification.model_validate(payload)
+        # Typed output via PydanticAI
+        classification: IntentClassification = result.output
 
         logger.info(
             f"[Intent Classifier V2] Classified as: {classification.intent} "

@@ -13,13 +13,8 @@ import logging
 from typing import List
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent as PydanticAgent
-from pydantic_ai import exceptions as pydantic_ai_exceptions
-
-try:
-    # Optional helper; older/newer PydanticAI builds may not expose this
-    from pydantic_ai.models.ollama import OllamaModel  # type: ignore[import]
-except Exception:  # pragma: no cover - environment dependent
-    OllamaModel = None  # type: ignore[assignment]
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.ollama import OllamaProvider
 
 from app.capabilities.base import BaseAgent, AgentMetadata, AgentContext
 from app.domain.schemas.customer import CustomerProfile
@@ -81,39 +76,23 @@ if _configured_response_model and _configured_response_model != _prompt_default_
 
 response_model_name = _configured_response_model or _prompt_default_response_model
 
-# Create PydanticAI agent with structured output
-if OllamaModel is not None:
-    response_model_config = OllamaModel(
-        model_name=response_model_name,
-        base_url=settings.OLLAMA_BASE_URL,
-    )
-else:  # Fallback when OllamaModel helper is unavailable
-    logger.warning(
-        "pydantic_ai.models.ollama.OllamaModel not available; "
-        "falling back to model spec 'ollama:%s'. "
-        "Ensure the PydanticAI Ollama provider is installed.",
-        response_model_name,
-    )
-    response_model_config = f"ollama:{response_model_name}"
+# Configure Ollama provider for PydanticAI
+_ollama_base = settings.OLLAMA_BASE_URL.rstrip("/")
+if not _ollama_base.endswith("/v1"):
+    _ollama_base = f"{_ollama_base}/v1"
 
-try:
-    response_pydantic_agent = PydanticAgent(
-        model=response_model_config,
-        result_type=str,  # Preferred when supported
-        system_prompt=response_prompt.system,
-    )
-except pydantic_ai_exceptions.UserError as e:
-    if "result_type" not in str(e):
-        raise
-    logger.warning(
-        "PydanticAI Agent does not support `result_type` keyword; "
-        "falling back to untyped agent. Error: %s",
-        e,
-    )
-    response_pydantic_agent = PydanticAgent(
-        model=response_model_config,
-        system_prompt=response_prompt.system,
-    )
+_ollama_provider = OllamaProvider(base_url=_ollama_base)
+
+response_model_config = OpenAIChatModel(
+    model_name=response_model_name,
+    provider=_ollama_provider,
+)
+
+response_pydantic_agent = PydanticAgent(
+    response_model_config,
+    output_type=str,  # Return string explanation
+    system_prompt=response_prompt.system,
+)
 
 
 # ============================================================================
@@ -199,8 +178,7 @@ class ResponseGenerationAgentV2(BaseAgent[ResponseGenerationInput, ResponseGener
             # Run PydanticAI agent - automatically handles retries and validation
             result = await response_pydantic_agent.run(user_prompt)
 
-            data = result.data
-            reasoning = data if isinstance(data, str) else str(data)
+            reasoning: str = result.output
 
             self._logger.info(
                 f"Generated reasoning ({len(reasoning)} chars) for {len(recommendations)} recommendations"

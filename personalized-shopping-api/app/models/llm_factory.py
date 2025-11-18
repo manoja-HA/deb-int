@@ -21,6 +21,7 @@ class LLMType(str, Enum):
     SENTIMENT = "sentiment"
     RECOMMENDATION = "recommendation"
     RESPONSE = "response"
+    INTENT = "intent"
 
 # Global cache for LLM instances
 _llm_cache: Dict[str, ChatOllama] = {}
@@ -63,6 +64,7 @@ def get_llm(
         LLMType.SENTIMENT: config.sentiment_model,
         LLMType.RECOMMENDATION: config.recommendation_model,
         LLMType.RESPONSE: config.response_model,
+        LLMType.INTENT: getattr(config, 'intent_model', config.response_model),  # Fallback to response_model
     }
 
     model_name = model_mapping[llm_type]
@@ -148,6 +150,7 @@ def get_model_info(llm_type: LLMType) -> Dict:
         LLMType.SENTIMENT: config.sentiment_model,
         LLMType.RECOMMENDATION: config.recommendation_model,
         LLMType.RESPONSE: config.response_model,
+        LLMType.INTENT: getattr(config, 'intent_model', config.response_model),  # Fallback to response_model
     }
 
     return {
