@@ -9,11 +9,17 @@ This is a complete rewrite of ResponseGenerationAgent using PydanticAI for:
 - Simpler code
 """
 
+import logging
 from typing import List
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent as PydanticAgent
-from pydantic_ai.models.ollama import OllamaModel
-import logging
+from pydantic_ai import exceptions as pydantic_ai_exceptions
+
+try:
+    # Optional helper; older/newer PydanticAI builds may not expose this
+    from pydantic_ai.models.ollama import OllamaModel  # type: ignore[import]
+except Exception:  # pragma: no cover - environment dependent
+    OllamaModel = None  # type: ignore[assignment]
 
 from app.capabilities.base import BaseAgent, AgentMetadata, AgentContext
 from app.domain.schemas.customer import CustomerProfile
@@ -76,14 +82,38 @@ if _configured_response_model and _configured_response_model != _prompt_default_
 response_model_name = _configured_response_model or _prompt_default_response_model
 
 # Create PydanticAI agent with structured output
-response_pydantic_agent = PydanticAgent(
-    model=OllamaModel(
+if OllamaModel is not None:
+    response_model_config = OllamaModel(
         model_name=response_model_name,
         base_url=settings.OLLAMA_BASE_URL,
-    ),
-    result_type=str,  # Return string explanation
-    system_prompt=response_prompt.system,
-)
+    )
+else:  # Fallback when OllamaModel helper is unavailable
+    logger.warning(
+        "pydantic_ai.models.ollama.OllamaModel not available; "
+        "falling back to model spec 'ollama:%s'. "
+        "Ensure the PydanticAI Ollama provider is installed.",
+        response_model_name,
+    )
+    response_model_config = f"ollama:{response_model_name}"
+
+try:
+    response_pydantic_agent = PydanticAgent(
+        model=response_model_config,
+        result_type=str,  # Preferred when supported
+        system_prompt=response_prompt.system,
+    )
+except pydantic_ai_exceptions.UserError as e:
+    if "result_type" not in str(e):
+        raise
+    logger.warning(
+        "PydanticAI Agent does not support `result_type` keyword; "
+        "falling back to untyped agent. Error: %s",
+        e,
+    )
+    response_pydantic_agent = PydanticAgent(
+        model=response_model_config,
+        system_prompt=response_prompt.system,
+    )
 
 
 # ============================================================================
@@ -169,7 +199,8 @@ class ResponseGenerationAgentV2(BaseAgent[ResponseGenerationInput, ResponseGener
             # Run PydanticAI agent - automatically handles retries and validation
             result = await response_pydantic_agent.run(user_prompt)
 
-            reasoning = result.data
+            data = result.data
+            reasoning = data if isinstance(data, str) else str(data)
 
             self._logger.info(
                 f"Generated reasoning ({len(reasoning)} chars) for {len(recommendations)} recommendations"

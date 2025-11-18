@@ -35,8 +35,9 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code
+# Copy application code and prompts
 COPY app /app/app
+COPY prompts /app/prompts
 COPY scripts /app/scripts
 COPY data /app/data
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
