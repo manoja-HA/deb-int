@@ -1,8 +1,7 @@
 version: '3.8'
 
 services:
-  # Ollama LLM service (using host Ollama)
-  # Uncomment to run Ollama in Docker instead
+  # Ollama LLM service for CPU-only small models
   ollama:
     image: ollama/ollama:latest
     container_name: shopping-ollama
@@ -12,6 +11,16 @@ services:
       - ollama-data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=10m  # Keep models loaded in memory for 10 minutes
+      - OLLAMA_NUM_PARALLEL=2  # Allow 2 concurrent requests
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'      # Limit to 4 CPU cores
+          memory: 12G      # Limit to 12GB RAM (3B model ~4GB + 8B model ~8GB)
+        reservations:
+          cpus: '2.0'
+          memory: 6G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -19,6 +28,7 @@ services:
       retries: 5
     networks:
       - shopping-network
+    restart: unless-stopped
 
   # PostgreSQL for LangFuse
   langfuse-db:

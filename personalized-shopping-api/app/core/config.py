@@ -121,14 +121,14 @@ class Settings(BaseSettings):
         return self.MIN_REVIEWS_FOR_INCLUSION
 
     PROFILING_MODEL: str = "llama3.2:3b"
-    SENTIMENT_MODEL: str = "llama3.1:8b"
+    SENTIMENT_MODEL: str = "llama3.2:3b"  # Smaller model for pattern matching (was llama3.1:8b)
     RECOMMENDATION_MODEL: str = "llama3.1:8b"
     RESPONSE_MODEL: str = "llama3.1:8b"
-    INTENT_MODEL: str = "llama3.1:8b"  # For intent classification
+    INTENT_MODEL: str = "llama3.2:3b"  # Smaller model for classification (was llama3.1:8b)
 
     MAX_TOKENS: int = 2048
     TEMPERATURE: float = 0.1
-    REQUEST_TIMEOUT: int = 30
+    REQUEST_TIMEOUT: int = 120  # Increased for CPU-only models (8B models need 60-90s on CPU)
 
     # ===== EMBEDDINGS =====
     EMBEDDING_MODEL: str = "BAAI/bge-base-en-v1.5"

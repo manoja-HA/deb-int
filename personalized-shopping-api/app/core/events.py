@@ -41,8 +41,9 @@ async def startup_event_handler() -> None:
         # Load vector store
         await load_vector_store()
 
-        # Warm up models (optional)
-        if settings.ENVIRONMENT == "production":
+        # Warm up models (always - eliminates cold-start for first request)
+        # Skip in testing environment to speed up tests
+        if not settings.TESTING:
             await warm_up_models()
 
         # Initialize cache (if enabled)
@@ -110,14 +111,34 @@ async def warm_up_models() -> None:
     global _models_warmed_up
 
     try:
-        logger.info("Warming up models...")
+        logger.info("Warming up Ollama models...")
 
-        # Perform a dummy inference to load models into memory
-        # This reduces latency for first real request
+        # Import here to avoid circular dependencies
+        from app.models.llm_factory import get_llm, LLMType
+
+        # Pre-load critical models into Ollama memory
+        # This eliminates 30-60s loading time on first request
+        models_to_warm = [
+            (LLMType.PROFILING, "profiling model"),
+            (LLMType.SENTIMENT, "sentiment model"),
+            (LLMType.INTENT, "intent model"),
+        ]
+
+        for llm_type, description in models_to_warm:
+            try:
+                logger.info(f"Pre-warming {description}...")
+                llm = get_llm(llm_type)
+
+                # Trigger model loading with minimal inference
+                from langchain_core.messages import HumanMessage
+                llm.invoke([HumanMessage(content="warmup")])
+
+                logger.info(f"✓ {description} loaded")
+            except Exception as model_error:
+                logger.warning(f"Failed to warm {description}: {model_error}")
 
         _models_warmed_up = True
-
-        logger.info("Models warmed up successfully")
+        logger.info("Model warm-up completed (models will stay loaded for 10 minutes)")
 
     except Exception as e:
         logger.warning(f"Model warm-up failed (non-critical): {e}")
